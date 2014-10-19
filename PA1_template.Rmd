@@ -1,25 +1,436 @@
----
-title: "Reproducible Research: Peer Assessment 1"
-output: 
-  html_document:
-    keep_md: true
----
+# Peer Assessment 1
+
+# 1. Goals
+
+The goal is to analyze the data from personal activity monitoring device. The device reports number of steps within 5-minute intervals. Assessment conditions determines the dataset to use, as well as analysis steps.
+
+Goals of the analysis can be summarized as follows. Detailed information about each analysis objective can be found in the corresponding section.  
+1. Investigate total number of steps per day. Analyze its distribution.  
+2. Analyze daily activity patterns.  
+3. Deduce the suitable method to fill in missing values.  
+4. Analyze the difference of activity patterns between weekdays and weekends.  
+
+# 2. Preparation
+
+Preparation consists of 2 main steps:  
+- Downloading the data. It is also essential to save download time for further reference.  
+- Reading the data into dataframe  
+
+The following constants will be used to download and read the data:
+```{r constantsBlock, results="hide"}
+#Download URL:
+datafile.URL <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip";
+#Filename for downloaded archive file (for us to define)
+datafile.zip <- "activity.zip";
+#CSV filename inside the archive
+datafile.csv <- "activity.csv";
+```
+
+Most explanations of analysis steps will be given in the text, while line-by-line explanations will be provided
+in R comments within R code blocks.
+
+<a name="2.1"></a>
+
+## 2.1. Downloading the data
+
+Data were downloaded and unpacked in a following manner:
+
+```{r downloadBlock, results='hide'}
+#Https and knitr sometimes have troubles working together
+#If it is windows, we'd better use internet2.dll
+if (.Platform$OS.type=="windows"){
+  setInternet2(T);
+}
+#Saving download time
+datafile.dlTime <- Sys.time();
+#Actually, downloading:
+download.file(url = datafile.URL, destfile=datafile.zip);
+# Unzipping
+unzip(zipfile = datafile.zip)
+```
+
+This analysis uses the zip file downloaded at `r format(datafile.dlTime, usetz=T)`. The file itself is available on request.
+
+<a name="2.2"></a>
+
+## 2.2. The Dataframe
+Activity data can be loaded into dataframe straightforwardly: 
+
+```{r readingBlock}
+#Reading csv file
+activity.dataframe <- read.csv(datafile.csv, header=T);
+```
+
+Each row of the dataframe contains following information:  
+- *date* The date, when the measurement was taken.  
+- *interval* The number of 5-minute interval during the day.  
+- *steps* The detected number of steps (NA stands for missing value).  
+
+# 3. Data Analysis
+
+<a name="3.1"></a>
+
+## 3.1. Analysis: Steps Each Day
+The goal of this part of the analysis is following:
+
+[Quote](https://class.coursera.org/repdata-007/human_grading/view/courses/972596/assessments/3/submissions)(accessed `r format(Sys.time(), usetz=T)`):  
+
+> For this part of the assignment, you can ignore the missing values in the dataset.  
+> - Make a histogram of the total number of steps taken each day  
+> - Calculate and report the mean and median total number of steps taken per day  
+
+According to assignment conditions it is acceptable to ignore some of the missing values during the day. However, there is one special case where missing values cannot be completely ignored.
+
+Calculating total number of steps involves summing up number of steps across the intervals. We should keep in mind that calling *sum(x, na.rm=T)* will produce result 0, if the input vector *x* consists entirely of NAs. Therefore, if entire day consisted of missing values, just summing up the number of steps will produce the value 0. However, the value 0 is not correct - actually, there is absolutely no information about the number of steps that day. A good option is to discount that day and make sure it does not influence this stage of the analysis.
+
+Analysis can be done as follows:
+```{r stepsAnalysis}
+#Creating day-by-day list.
+#Each list element will have a part of dataframe, corresponding to single day
+activity.byDay <- split(activity.dataframe, activity.dataframe$date);
+
+# Now calculating the total number of steps, separately for each day
+# (and simplifying the results with sapply)
+stepsEachDay.withNA <- sapply(activity.byDay,
+                function(x){
+                  #So which intervals for that day
+                  #do not have missing data? 
+                  actualSteps <- na.omit(x$steps);
+                  if (length(actualSteps)>0){
+                    #Some of the intervals have data
+                    #Sum them up to have number of steps per day
+                    sum(actualSteps, na.rm=T)                    
+                  }else{
+                    #That was a bad day:
+                    #Not a single measurement was taken.
+                    #Put NA as a marker that this day was not measured properly
+                    #We will discount NAs later.
+                    NA
+                  }
+                });
+#Discount NAs. Leave only the days where number of steps was counted.
+stepsEachDay <- na.omit(stepsEachDay.withNA);
+#Now we are ready to build histogram
+```
+
+Here is the histogram of number of steps per day:
+
+```{r stepsHistogram}
+hist(stepsEachDay, breaks=10, xlab = "Steps per day", main = "")
+```
+
+Histogram looks close to normal distribution. However, normality tests are out of scope of this analysis.
+
+Mean and median of the number of steps per day can be obtained as follows:
+```{r stepsCharacteristics}
+mean(stepsEachDay)
+median(stepsEachDay)
+```
+
+Mean and median are quite close to each other. The distribution is fairly symmetric<a href="fairlySym"></a>.
+
+<a name="3.2"></a>
+
+## 3.2. Analysis: Daily Activity Patterns
+The goal of this part of the analysis is following:
+
+[Quote](https://class.coursera.org/repdata-007/human_grading/view/courses/972596/assessments/3/submissions)(accessed `r format(Sys.time(), usetz=T)`):
+
+> Make a time series plot (i.e. type = "l") of the 5-minute interval (x-axis) and the average number of steps taken, averaged across all days (y-axis)
+> Which 5-minute interval, on average across all the days in the dataset, contains the maximum number of steps?
+
+This analysis can be performed as follows:
+```{r activityAnalysis}
+#Splitting activity dataframe by intervals
+activity.byIntervals <- split(activity.dataframe, activity.dataframe$interval, drop = T);
+#drop=T is extra precaution against empty intervals.
+#If we read the data from CSV, it should never happen
+
+# Now calculating the mean number of steps for each interval
+# and adding it to the dataframe
+meanByIntervals <- do.call(rbind,
+      #lapply will create each row of a dataframe (as a separate DF)
+      #do.call(rbind, will glue all those rows together
+      #Unfortunately, sapply was not able to handle it
+      lapply(activity.byIntervals,
+        function(x){
+          #names(x) will contain interval name
+          data.frame(interval=as.numeric(x[1,]$interval), steps.mean = mean(x$steps, na.rm=T))
+          #Interval number is obtained as x[1,]$interval. Why we are sure that row 1 exists?
+          #If there was not a single line in x, split function would not have
+          #created that record in the list (due to drop=T parameter, see above).
+        })
+      )
+```
+
+As a result, dataframe *meanByintervals* contains the intervals and average number of steps taken during that interval. Plot can be created as follows: <a name="fig2"></a>
+
+```{r activityPlot}
+plot(meanByIntervals$interval, meanByIntervals$steps.mean, type="l",
+     xlab = "5-minute Interval", ylab = "Average steps");
+```
+
+It has to be noted that this stage of the analysis does not have the missing value problem, which we encountered previously. Unlike *sum*, the function *mean(x, na.rm=T)* will produce NaN, if input vector *x* consists of NAs only.
+
+The following interval contained maximum average number of steps:
+```{r intMaxSteps}
+  meanByIntervals[which.max(meanByIntervals$steps.mean),]$interval
+```
+It contained the folllowing number of steps:
+```{r maxSteps}
+  meanByIntervals[which.max(meanByIntervals$steps.mean),]$steps.mean
+```
+
+<a name="3.3"></a>
+
+## 3.3. Filling in Missing Values
+
+The task of this step of the analysis was defined as follows:
+
+[Quote](https://class.coursera.org/repdata-007/human_grading/view/courses/972596/assessments/3/submissions)(accessed `r format(Sys.time(), usetz=T)`):
+
+> Note that there are a number of days/intervals where there are missing values (coded as NA). The presence of missing days may introduce bias into some calculations or summaries of the data.
+
+> Calculate and report the total number of missing values in the dataset (i.e. the total number of rows with NAs)
+
+> Devise a strategy for filling in all of the missing values in the dataset. The strategy does not need to be sophisticated. For example, you could use the mean/median for that day, or the mean for that 5-minute interval, etc.
+
+> Create a new dataset that is equal to the original dataset but with the missing data filled in.
+
+> Make a histogram of the total number of steps taken each day and Calculate and report the mean and median total number of steps taken per day. Do these values differ from the estimates from the first part of the assignment? What is the impact of imputing missing data on the estimates of the total daily number of steps?
+
+The total number of missing values can be counted like that:
+```{r totalMissing}
+sum(is.na(activity.dataframe))
+```
+
+The strategy for filling in the missing values has to take into account the following arguments:
+- The average number of steps per interval depends a lot on the time of the day ([see figure](#fig2))
+- The movement paterns might differ depending on the day of the week (will be investigated in [section 3.4](#3.4)).
+
+Therefore, a plausible strategy is to replace missing values with the average values for the same interval at the same day of the week. If this information is not available, the value might be substituted by the mean number of steps for the same interval. Replacement values can be obtained as follows: <a name="addingWeekdays"></a>
+
+```{r dayIntervalMeansBlock}
+  # Add weekday to the dataset
+  activity.dataframe$weekday <- weekdays(as.Date(activity.dataframe$date), abbreviate = T);
+
+  #Now splitting by both interval and weekday
+  activity.dayintsplit = split(activity.dataframe,
+                               list(activity.dataframe$interval, activity.dataframe$weekday),
+                               drop = T);
+
+  #Creating a list of replacement values
+  dayandinterval.means = lapply(activity.dayintsplit, 
+                                function(x){mean(x$steps, na.rm=T)});
+```
+
+As for means per interval, they are already calcualted. It is *meansByIntervals*, defined (code block above)[#addingWeekdays].
+
+The replacement itself is done as follows:
+```{r naReplacement}
+  activity.dataframe.noNAs <- do.call(rbind,
+      #apply will create rows of new dataset - one after another.
+      #afterwards do.call(rbind, will merge them into single dataset
+      apply(activity.dataframe, 1,#apply to each row of dataframe
+              function(x){
+                #Row of dataframe was transformed to character vector.
+                #Access methods are somewhat different. We have to keep it in mind.
+                
+                stepsVal <- x["steps"];
+                
+                #Is the step count missing for that row?
+                #If yes - replacing.
+                if (is.na(stepsVal)){
+                  listIndex <- paste(as.numeric(x["interval"]),".",x["weekday"], sep="");
+                  #listIndex will be something like "500.Mo" (500th interval, Monday)
+                  #this is exactly wat we shall use inside [[]] operator to reference
+                  #proper dayandinterval.means element.
+                  
+                  #as.numeric is applied to interval to avoid problems with intervals like "  0"
+                  
+                  #Replacing:
+                  stepsVal <- dayandinterval.means[[listIndex]];
+                }
+                
+                #If the value is still missing (i.e. for that combination of weekday/interval no measurement
+                #was reported ever), then we replace it by mean for the interval.
+                if (is.na(stepsVal)){
+                  stepsVal <- meanByIntervals[x["interval"]];
+                }
+                
+                #Still NA? Whatever, keep it like that.
+          
+                #Creating a row of new dataframe.                
+                data.frame(steps=as.numeric(stepsVal), date=x["date"], interval=as.numeric(x["interval"]), weekday=x["weekday"]);
+              }) # end apply
+      ); #end do.call
+```
+
+The number of steps per day can be analyzed in similar as before (in [section 2.2](#2.2)). Missing values are no longer a concern, so the algorithm is much simpler.
+
+```{r stepsAnalysisNoNAs}
+#Creating day-by-day list.
+#Each list element will have a part of dataframe, corresponding to single day
+activity.byDay.noNA <- split(activity.dataframe.noNAs, activity.dataframe.noNAs$date);
+
+# Now calculating the total number of steps, separately for each day
+# (and simplifying the results with sapply)
+stepsEachDay.NAreplaced <- sapply(activity.byDay.noNA,
+                function(x){
+                    #Just sum up steps per day
+                    sum(x$steps, na.rm=T)                    
+                });
+#Now we are ready to build another histogram
+```
+
+Here is the histogram of number of steps per day:
+```{r stepsHistogram.NAreplaced}
+hist(stepsEachDay.NAreplaced, breaks=10, main="", xlab="Steps per Day")
+```
+
+Histogram looks close to normal distribution. However, normality tests are out of scope of this analysis.
+
+Mean and median of the number of steps per day can be obtained as follows:
+```{r stepsCharacteristics.NAreplaced}
+mean(stepsEachDay.NAreplaced)
+median(stepsEachDay.NAreplaced)
+```
+Compare to the previously identified ones:
+```{r stepsCharacteristics2}
+mean(stepsEachDay)
+median(stepsEachDay)
+```
+
+The changes in mean and median do not look significant `r paste(round(abs(mean(stepsEachDay.NAreplaced)-mean(stepsEachDay,na.rm=T))/mean(stepsEachDay)*100,2),"%",sep="")` and `r paste(round(abs(median(stepsEachDay.NAreplaced)-median(stepsEachDay,na.rm=T))/median(stepsEachDay)*100,2),"%",sep="")` respectively.
+
+It has to be mentioned that calculation of *stepsEachDay* did not account for single missing values, but it did account for missing days. It played significant role in the outcome of the analysis. See [appendix](#A.1) for illustration of what could have happened if missing values were totally ignored.
+
+<a name="3.4"></a>
+
+## 3.4. Analysis: Difference Between Weekdays and Weekends
+
+The task for this step of analysis is identified as follows:
+
+> Create a new factor variable in the dataset with two levels – “weekday” and “weekend” indicating whether a given date is a weekday or weekend day.
+> Make a panel plot containing a time series plot (i.e. type = "l") of the 5-minute interval (x-axis) and the average number of steps taken, averaged across all weekday days or weekend days (y-axis).
+
+New factor for day of the week was already created in (previous section)[#addingWeekday] - we used weekday in order to fill in missing values. Now it need to be transformed into new factor "weekday/weekend".
+
+```{r weekdayBlock}
+  #Names of weekday. My R is in German, so the abbreviations for Saturday and Sunday are "Sa" (Samstag, Saturday)
+  #and "So" (Sonntag, sunday) 
+  weekendNames = c("Sa","So");
+  
+  #Here is some vectorized if-the-else
+  activity.dataframe$weekendfactor <-
+    as.factor(ifelse(activity.dataframe$weekday %in% weekendNames, "weekend", "weekday"));
+  #Don't forget that it is supposed to be factor, not character
+```
+
+Now creating time series separately for weekdays and for weekends. It is done similarly to (section 2.3)[#2.3]
+
+```{r activityAnalysisWeekdays}
+#Getting separately weekdays and weekends dataset
+activity.dataframe.weekdays <- activity.dataframe[activity.dataframe$weekendfactor=="weekday",];
+activity.dataframe.weekends <- activity.dataframe[activity.dataframe$weekendfactor=="weekend",];
+
+#Splitting activity dataframe by intervals
+activity.weekdays.byIntervals <- split(activity.dataframe.weekdays, activity.dataframe.weekdays$interval,
+                                       drop = T);
+activity.weekends.byIntervals <- split(activity.dataframe.weekends, activity.dataframe.weekends$interval,
+                                       drop = T);
+#drop=T is extra precaution against empty intervals.
+#If we read the data from CSV, it should never happen
+
+# Now calculating the mean number of steps for each interval
+# and adding it to the dataframe
+meanByIntervals.weekdays <- do.call(rbind,
+      #lapply will create each row of a dataframe (as a separate DF)
+      #do.call(rbind, will glue all those rows together
+      #Unfortunately, sapply was not able to handle it
+      lapply(activity.weekdays.byIntervals,
+        function(x){
+          #names(x) will contain interval name
+          data.frame(interval=as.numeric(x[1,]$interval), steps.mean = mean(x$steps, na.rm=T))
+          #Interval number is obtained as x[1,]$interval. Why we are sure that row 1 exists?
+          #If there was not a single line in x, split function would not have
+          #created that record in the list (due to drop=T parameter, see above).
+        })
+      )
+
+#The same for weekends
+meanByIntervals.weekends <- do.call(rbind,
+      #lapply will create each row of a dataframe (as a separate DF)
+      #do.call(rbind, will glue all those rows together
+      #Unfortunately, sapply was not able to handle it
+      lapply(activity.weekends.byIntervals,
+        function(x){
+          #names(x) will contain interval name
+          data.frame(interval=as.numeric(x[1,]$interval), steps.mean = mean(x$steps, na.rm=T))
+          #Interval number is obtained as x[1,]$interval. Why we are sure that row 1 exists?
+          #If there was not a single line in x, split function would not have
+          #created that record in the list (due to drop=T parameter, see above).
+        })
+      )
+```
+
+The plot can be created as follows:
+
+```{r activityPlotWeekdays}
+par(mfrow=c(2,1))
+plot(meanByIntervals.weekdays$interval, meanByIntervals.weekdays$steps.mean, type="l",
+     xlab = "5-minute Interval", ylab = "Average steps", main="Weekdays");
+plot(meanByIntervals.weekends$interval, meanByIntervals.weekends$steps.mean, type="l",
+     xlab = "5-minute Interval", ylab = "Average steps", main="Weekends");
+```
+
+Weekend plot shows clearly more movement.<a href="moreMov"></a>
+
+# 4. Future Work
+
+There are several points, where analysis could be enhanced:
+
+- Filling in missing values. The algorithm look plausible. However, this analysis provides no real investigation of how well it performed, does not compare it with alternatives (and even comparison criteria are unclear).  
+
+- A lot of unclear terms are present in the analysis. For example, sometimes report mentions that "plot shows clearly more movement", histogram is "close to normal", distribution is "fairly symmetrical". However, claiming that distribution is normal requires normality test (like Anderson-Darling test), claiming that distribution is symmetrical requires calculating skew (for example), claiming that plot shows more movement requires measurement of "movement per day" (e.g. average number of steps) and so on. Clarifying each and every vague claim can significantly strengthen the analysis.  
 
 
-## Loading and preprocessing the data
+# 5 Summary
 
+The detailed outcomes of the analysis are presented in the corresponding sections. The outcomes can be summarized as follows.  
+1. Number of steps per day seems to follow normal distribution (normality test can be future work direction).  
+2. Missing values can be successfully replaced by the average values for the same interval in the same weekday.  
+3. Weekdays and weekends show obviously different activity patterns. Weekends show more activity (which is understandable).
 
+# Appendix
 
-## What is mean total number of steps taken per day?
+<a name="A.1"></a>
 
+## A.1. Illustration: Mishandlng Missing Values
 
+To summarize, the anlaysis showed no significant difference between the case where missing values were replaced and the case where missing values were ignored. However, it was all due to the fact that missing values were somewhat accounted for, even when calcualting *stepsEachDay*. For illustration, that is what would have happened if NAs were totally ignored:
 
-## What is the average daily activity pattern?
+```{r stepsAnalysisIgnoreNA}
+# Again, calculating the total number of steps, separately for each day
+# (and simplifying the results with sapply)
+stepsEachDay.NAignored <- sapply(activity.byDay,
+                function(x){
+                  #Sum them up to have number of steps per day
+                  sum(x$steps, na.rm=T)                    
+                });
+```
+That histogram would have been like that:
 
+```{r stepsHistogram.NAignored}
+hist(stepsEachDay.NAignored, breaks=10)
+```
 
+Now histogram is not close to normal - leftmost bean is very high due to the exceptional amount of zeros (which are in fact missing values, not real zero-step days).
 
-## Imputing missing values
+Mean and medians are following:
+```{r stepsCharacteristics.NAignored}
+mean(stepsEachDay.NAignored)
+median(stepsEachDay.NAignored)
+```
 
-
-
-## Are there differences in activity patterns between weekdays and weekends?
+The changes in mean and median before and after filling in missing values would have been `r paste(round(abs(mean(stepsEachDay.NAreplaced)-mean(stepsEachDay.NAignored,na.rm=T))/mean(stepsEachDay.NAignored)*100,2),"%",sep="")` and `r paste(round(abs(median(stepsEachDay.NAreplaced)-median(stepsEachDay.NAignored,na.rm=T))/median(stepsEachDay.NAignored)*100,2),"%",sep="")` respectively.
